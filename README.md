@@ -4,6 +4,14 @@ A modern, web-based aviation weather dashboard that lets you search any airport 
 
 ---
 
+## 🌍 Live Website
+
+You can use the hosted version of this project here:
+
+**https://orangesplash69.github.io/METAR-Lens/**
+
+---
+
 ## 🌦 What it does
 
 This project turns raw aviation weather into an easy-to-read, visual dashboard designed for both **real-world pilots** and **flight sim enthusiasts**.
@@ -65,6 +73,8 @@ The app runs entirely in the browser using:
 
 There is **no backend required**. Just open it in your browser and use it.
 
+## Hosted at:
+  https://orangesplash69.github.io/METAR-Lens/
 ---
 
 ## 📸 Preview
