@@ -70,7 +70,7 @@ There is **no backend required**. Just open it in your browser and use it.
 ## 📸 Preview
 
 <img width="1105" height="415" alt="image" src="https://github.com/user-attachments/assets/f76afca4-b7fe-4bb1-8190-5c4a1ebd4862" />
-<img width="1090" height="866" alt="image" src="https://github.com/user-attachments/assets/70cd2ee1-714c-4a56-adef-3f397f44c9e1" />
+<img width="1083" height="531" alt="image" src="https://github.com/user-attachments/assets/e1f44f8c-fb5c-4864-973a-3441039f5aef" />
 <img width="1076" height="511" alt="image" src="https://github.com/user-attachments/assets/0e070255-793c-40f3-9d9b-4d885c86bb64" />
 <img width="1079" height="582" alt="image" src="https://github.com/user-attachments/assets/401c7baf-3b97-4986-a639-50384f151c71" />
 
