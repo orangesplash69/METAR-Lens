@@ -1,0 +1,378 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>METAR Lens</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <div class="page">
+      <header class="hero">
+        <div class="hero-text">
+          <p class="eyebrow">Live METAR</p>
+          <h1>METAR Lens</h1>
+          <p class="subtitle">
+            Enter an airport name, IATA, or ICAO to fetch the latest METAR.
+          </p>
+        </div>
+        <button class="toggle" id="themeToggle" aria-pressed="false" type="button">
+          <span class="toggle-label">Dark mode</span>
+          <span class="toggle-switch" aria-hidden="true">
+            <span class="toggle-knob"></span>
+          </span>
+        </button>
+      </header>
+
+      <section class="card search-card">
+        <form id="metarForm" class="search-form">
+          <label class="search-label" for="airportInput">Airport</label>
+          <div class="search-row">
+            <input
+              id="airportInput"
+              type="search"
+              placeholder="e.g., Frankfurt, JFK, KJFK"
+              autocomplete="off"
+              spellcheck="false"
+            />
+            <button type="submit" id="fetchBtn">Get METAR</button>
+          </div>
+          <div class="search-meta">
+            <span id="resolveStatus" class="status"></span>
+            <span id="iataHint" class="hint"></span>
+          </div>
+        </form>
+      </section>
+
+      <section class="card metar-card hidden" id="metarCard">
+        <div class="metar-header">
+          <div>
+            <p class="station-name" id="stationName">Station</p>
+            <p class="station-meta" id="stationMeta">ICAO</p>
+          </div>
+          <div class="updated">
+            <p class="updated-label">Last updated</p>
+            <p class="updated-time" id="updatedTime">--</p>
+          </div>
+        </div>
+
+        <div class="grid">
+          <article class="info-card">
+            <div class="icon-wrap">
+              <svg viewBox="0 0 24 24" class="icon" aria-hidden="true">
+                <path
+                  d="M3 12h11a3 3 0 0 0 0-6H9"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.6"
+                  stroke-linecap="round"
+                />
+                <path
+                  d="M14 6l-2-2 2-2"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.6"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+                <path
+                  d="M21 12h-7a3 3 0 0 0 0 6h3"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.6"
+                  stroke-linecap="round"
+                />
+                <path
+                  d="M18 18l2 2-2 2"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.6"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+              </svg>
+            </div>
+            <div>
+              <p class="info-label">Wind</p>
+              <p class="info-value" id="windValue">--</p>
+              <p class="info-sub" id="windSub">--</p>
+            </div>
+          </article>
+
+          <article class="info-card">
+            <div class="icon-wrap">
+              <svg viewBox="0 0 24 24" class="icon" aria-hidden="true">
+                <path
+                  d="M1.5 12s3.8-6 10.5-6 10.5 6 10.5 6-3.8 6-10.5 6-10.5-6-10.5-6z"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.6"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+                <circle
+                  cx="12"
+                  cy="12"
+                  r="3"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.6"
+                />
+              </svg>
+            </div>
+            <div>
+              <p class="info-label">Visibility</p>
+              <p class="info-value" id="visValue">--</p>
+              <p class="info-sub" id="visSub">--</p>
+            </div>
+          </article>
+
+          <article class="info-card">
+            <div class="icon-wrap">
+              <svg viewBox="0 0 24 24" class="icon" aria-hidden="true">
+                <path
+                  d="M6 18h11a4 4 0 0 0 0-8 5.5 5.5 0 0 0-10.6 1.8A3.5 3.5 0 0 0 6 18z"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.6"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+              </svg>
+            </div>
+            <div>
+              <p class="info-label">Clouds</p>
+              <p class="info-value" id="cloudValue">--</p>
+              <p class="info-sub" id="cloudSub">--</p>
+            </div>
+          </article>
+
+          <article class="info-card">
+            <div class="icon-wrap">
+              <svg viewBox="0 0 24 24" class="icon" aria-hidden="true">
+                <path
+                  d="M14 14.6V5a2 2 0 1 0-4 0v9.6a4 4 0 1 0 4 0z"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.6"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+                <line
+                  x1="10"
+                  y1="9"
+                  x2="14"
+                  y2="9"
+                  stroke="currentColor"
+                  stroke-width="1.6"
+                  stroke-linecap="round"
+                />
+              </svg>
+            </div>
+            <div>
+              <p class="info-label">Temperature</p>
+              <p class="info-value" id="tempValue">--</p>
+              <p class="info-sub" id="tempSub">--</p>
+            </div>
+          </article>
+
+          <article class="info-card">
+            <div class="icon-wrap">
+              <svg viewBox="0 0 24 24" class="icon" aria-hidden="true">
+                <path
+                  d="M12 3s5 6 5 9a5 5 0 1 1-10 0c0-3 5-9 5-9z"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.6"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+              </svg>
+            </div>
+            <div>
+              <p class="info-label">Dew Point</p>
+              <p class="info-value" id="dewValue">--</p>
+              <p class="info-sub" id="dewSub">--</p>
+            </div>
+          </article>
+
+          <article class="info-card">
+            <div class="icon-wrap">
+              <svg viewBox="0 0 24 24" class="icon" aria-hidden="true">
+                <circle
+                  cx="12"
+                  cy="12"
+                  r="7"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.6"
+                />
+                <path
+                  d="M12 12l4-3"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.6"
+                  stroke-linecap="round"
+                />
+                <circle cx="12" cy="12" r="1.5" fill="currentColor" />
+              </svg>
+            </div>
+            <div>
+              <p class="info-label">Pressure</p>
+              <p class="info-value" id="pressValue">--</p>
+              <p class="info-sub" id="pressSub">--</p>
+            </div>
+          </article>
+
+          <article class="info-card">
+            <div class="icon-wrap">
+              <svg viewBox="0 0 24 24" class="icon" aria-hidden="true">
+                <path
+                  d="M5 18h14M7 14h10M9 10h6M11 6h2"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.6"
+                  stroke-linecap="round"
+                />
+              </svg>
+            </div>
+            <div>
+              <p class="info-label">Flight Category</p>
+              <p class="info-value" id="flightValue">--</p>
+              <p class="info-sub" id="flightSub">--</p>
+            </div>
+          </article>
+        </div>
+
+        <div class="raw-block">
+          <p class="raw-label">Raw METAR</p>
+          <pre id="rawMetar"></pre>
+        </div>
+      </section>
+
+      <section class="card tool-card hidden" id="toolsCard">
+        <div class="tool-header">
+          <div>
+            <p class="eyebrow">Runway Wind</p>
+            <h2>Runway Wind Component</h2>
+          </div>
+          <p class="tool-subtitle">Uses the latest METAR wind for this airport.</p>
+        </div>
+        <div class="runway-grid">
+          <div class="runway-input">
+            <label for="runwaySelect">Runway</label>
+            <select id="runwaySelect">
+              <option value="">Select runway</option>
+            </select>
+            <p class="runway-note" id="runwayNote">Waiting for METAR wind.</p>
+          </div>
+          <div class="runway-results" id="runwayResults">
+            <div class="component">
+              <span class="arrow" id="headArrow">↑</span>
+              <div>
+                <p class="component-label" id="headLabel">Head/Tailwind</p>
+                <p class="component-value" id="headValue">--</p>
+                <p class="component-sub" id="headSub">--</p>
+              </div>
+            </div>
+            <div class="component">
+              <span class="arrow" id="crossArrow">→</span>
+              <div>
+                <p class="component-label" id="crossLabel">Crosswind</p>
+                <p class="component-value" id="crossValue">--</p>
+                <p class="component-sub" id="crossSub">--</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="card risk-card hidden" id="riskCard">
+        <div class="tool-header">
+          <div>
+            <p class="eyebrow">Risk Layers</p>
+            <h2>Turbulence & Icing</h2>
+          </div>
+          <p class="tool-subtitle">Estimated from METAR + TAF trends.</p>
+        </div>
+        <div class="risk-grid">
+          <div class="risk-item">
+            <p class="risk-label">Turbulence (Now)</p>
+            <span class="risk-badge" id="turbNow">--</span>
+          </div>
+          <div class="risk-item">
+            <p class="risk-label">Turbulence (Forecast)</p>
+            <span class="risk-badge" id="turbForecast">--</span>
+          </div>
+          <div class="risk-item">
+            <p class="risk-label">Icing (Now)</p>
+            <span class="risk-badge" id="iceNow">--</span>
+          </div>
+          <div class="risk-item">
+            <p class="risk-label">Icing (Forecast)</p>
+            <span class="risk-badge" id="iceForecast">--</span>
+          </div>
+        </div>
+        <p class="risk-note" id="riskNote">Risk scores update with each METAR/TAF refresh.</p>
+      </section>
+
+      <section class="card taf-card hidden" id="tafCard">
+        <div class="tool-header">
+          <div>
+            <p class="eyebrow">TAF Forecast</p>
+            <h2>Forecast Timeline</h2>
+          </div>
+          <p class="tool-subtitle" id="tafStatus">Awaiting TAF data.</p>
+        </div>
+        <div class="chart-grid">
+          <div class="chart-panel">
+            <p class="chart-title">Wind Speed</p>
+            <div class="chart-frame">
+              <canvas id="windSpeedChart"></canvas>
+            </div>
+          </div>
+          <div class="chart-panel">
+            <p class="chart-title">Wind Compass</p>
+            <div class="chart-frame chart-frame--square">
+              <canvas id="windDirChart"></canvas>
+            </div>
+          </div>
+          <div class="chart-panel">
+            <p class="chart-title">Visibility</p>
+            <div class="chart-frame">
+              <canvas id="visibilityChart"></canvas>
+            </div>
+          </div>
+          <div class="chart-panel">
+            <p class="chart-title">Cloud Layers</p>
+            <div class="chart-frame chart-frame--tall">
+              <canvas id="ceilingChart"></canvas>
+            </div>
+          </div>
+        </div>
+        <div class="raw-block">
+          <p class="raw-label">Raw TAF</p>
+          <pre id="rawTaf"></pre>
+        </div>
+      </section>
+
+      <section class="card error-card hidden" id="errorCard">
+        <p id="errorMessage"></p>
+      </section>
+
+      <footer class="footer">
+        <p>Data: NOAA Aviation Weather API (METAR + TAF) • Airport data: OurAirports.</p>
+        <p class="footnote">For situational awareness only. Not for flight planning.</p>
+      </footer>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>
