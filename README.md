@@ -8,7 +8,7 @@ A modern aviation weather dashboard that lets you search any airport by **name, 
 
 You can use the hosted web version here:
 
-https://orangesplash69.github.io/METAR-Lens/
+https://orangesplash.de/metar_lens
 
 ---
 
