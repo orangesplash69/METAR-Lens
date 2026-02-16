@@ -1,14 +1,24 @@
 # ✈️ METAR Lens
 
-A modern, web-based aviation weather dashboard that lets you search any airport by **name, IATA, or ICAO code** and (almost) instantly view **live METAR and TAF data** in a clean, pilot-friendly interface.
+A modern aviation weather dashboard that lets you search any airport by **name, IATA, or ICAO code** and instantly view **live METAR and TAF data** in a clean, pilot-friendly interface — now also available as an **Android app**.
 
 ---
 
 ## 🌍 Live Website
 
-You can use the hosted version of this project here:
+You can use the hosted web version here:
 
-**https://orangesplash69.github.io/METAR-Lens/**
+https://orangesplash69.github.io/METAR-Lens/
+
+---
+
+## 📱 Android App
+
+METAR Lens is also available as a native Android application.
+
+The Android app provides the same features as the web version in a fast, full-screen mobile experience, making it perfect for use on the go in the cockpit, at the airport, or while flight simming.
+
+If you downloaded the APK from GitHub, you can install it directly on any modern Android device.
 
 ---
 
@@ -17,13 +27,13 @@ You can use the hosted version of this project here:
 This project turns raw aviation weather into an easy-to-read, visual dashboard designed for both **real-world pilots** and **flight sim enthusiasts**.
 
 You get:
-- Live **METAR** decoding  
-- **TAF** forecast charts  
-- **Wind and cloud** visualizations  
-- **Runway wind component** calculator  
-- **Turbulence and icing** risk indicators  
+- Live METAR decoding  
+- TAF forecast charts  
+- Wind and cloud visualizations  
+- Runway wind component calculator  
+- Turbulence and icing risk indicators  
 
-All in one responsive, modern web app.
+All in one responsive, modern aviation weather app.
 
 ---
 
@@ -36,7 +46,8 @@ All in one responsive, modern web app.
 - **Headwind, tailwind, and crosswind** calculation
 - **Turbulence and icing** risk estimation
 - **Dark and light mode**
-- Fully **responsive** design
+- Fully **responsive** web and mobile UI
+- Android app support
 
 ---
 
@@ -44,6 +55,7 @@ All in one responsive, modern web app.
 
 This project is built for:
 - Flight simulation pilots (MSFS, X-Plane, DCS, etc)
+- Real-world pilots
 - Aviation enthusiasts
 - Developers building aviation tools
 
@@ -53,7 +65,7 @@ It provides a fast and intuitive way to understand airport weather, forecast tre
 
 ## 🔌 Data sources
 
-The dashboard uses **free aviation data** only:
+METAR Lens uses **free aviation data only**:
 - NOAA Aviation Weather
 - AVWX (free tier)
 - OurAirports and OpenFlights for airport and runway data
@@ -64,17 +76,17 @@ No paid APIs or keys are required.
 
 ## 🚀 How it works
 
-The app runs entirely in the browser using:
-- HTML
-- CSS
-- JavaScript
-- Fetch API
-- Charting libraries for visualizations
+The app runs using:
+- HTML  
+- CSS  
+- JavaScript  
+- Fetch API  
+- Charting libraries for visualizations  
 
-There is **no backend required**. Just open it in your browser and use it.
+The Android version wraps the web app in a native WebView so it behaves like a real mobile application while still using the same free data sources.
 
-## Hosted at:
-  https://orangesplash69.github.io/METAR-Lens/
+There is **no backend required**.
+
 ---
 
 ## 📸 Preview
