@@ -55,7 +55,6 @@ All in one responsive, modern aviation weather app.
 
 This project is built for:
 - Flight simulation pilots (MSFS, X-Plane, DCS, etc)
-- Real-world pilots
 - Aviation enthusiasts
 - Developers building aviation tools
 
