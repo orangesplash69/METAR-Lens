@@ -7,6 +7,16 @@ const RUNWAYS_URL =
 const DEFAULT_PROXY_TEMPLATES = [
   "https://api.codetabs.com/v1/proxy?quest={url}",
 ];
+const FAVORITES_STORAGE_KEY = "metar-favorites-v1";
+const FAVORITES_MAX_ITEMS = 20;
+const SHARE_TTL_SECONDS = {
+  "10s": 10,
+  "1h": 60 * 60,
+  "6h": 6 * 60 * 60,
+  "24h": 24 * 60 * 60,
+  "7d": 7 * 24 * 60 * 60,
+};
+const SHORT_LINK_DOMAIN = (document.querySelector('meta[name="metarlens:short-link-domain"]')?.content || '').trim();
 
 const dom = {
   form: document.getElementById("metarForm"),
@@ -60,6 +70,25 @@ const dom = {
   windDirChart: document.getElementById("windDirChart"),
   visibilityChart: document.getElementById("visibilityChart"),
   ceilingChart: document.getElementById("ceilingChart"),
+  runwayAnalysisCard: document.getElementById("runwayAnalysisCard"),
+  runwayAnalysisMeta: document.getElementById("runwayAnalysisMeta"),
+  runwayList: document.getElementById("runwayList"),
+  warningCard: document.getElementById("warningCard"),
+  warningList: document.getElementById("warningList"),
+  atisCard: document.getElementById("atisCard"),
+  atisOutput: document.getElementById("atisOutput"),
+  runwayPerformanceList: document.getElementById("runwayPerformanceList"),
+  favoriteBtn: document.getElementById("favoriteBtn"),
+  shareBtn: document.getElementById("shareBtn"),
+  shareStatus: document.getElementById("shareStatus"),
+  favoritesList: document.getElementById("favoritesList"),
+  favoritesEmpty: document.getElementById("favoritesEmpty"),
+  shareCard: document.getElementById("shareCard"),
+  shareLinkInput: document.getElementById("shareLinkInput"),
+  copyTextBtn: document.getElementById("copyTextBtn"),
+  shareLinkBtn: document.getElementById("shareLinkBtn"),
+  sharePanelStatus: document.getElementById("sharePanelStatus"),
+  sharedBriefingNote: document.getElementById("sharedBriefingNote"),
 };
 
 const state = {
@@ -70,9 +99,21 @@ const state = {
   currentMetar: null,
   currentTaf: null,
   charts: null,
+  currentRunways: [],
+  selectedRunwayComponents: null,
+  currentResolved: null,
+  bestRunway: null,
+  favorites: [],
+  shareStatusTimer: null,
+  sharePanelTimer: null,
+  currentWarnings: [],
+  currentShareLink: "",
+  sharedSnapshot: null,
 };
 
 initTheme();
+initFavorites();
+void initSharedBriefingFromUrl();
 
 dom.form.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -82,11 +123,42 @@ dom.form.addEventListener("submit", async (event) => {
     return;
   }
 
+  await loadAirportWeather(query);
+});
+
+async function loadAirportWeather(query, options = {}) {
   clearError();
+  setShareStatus("");
+  setSharePanelStatus("");
+  state.currentMetar = null;
+  state.currentTaf = null;
+  state.currentResolved = null;
+  state.bestRunway = null;
+  state.selectedRunwayComponents = null;
+  state.currentRunways = [];
+  state.currentWarnings = [];
+  state.currentShareLink = "";
+  state.sharedSnapshot = null;
+  if (!options.keepShareToken) {
+    clearShareTokenFromUrl();
+  }
+  updateFavoriteButtonState();
+  renderFavorites();
+
+  if (dom.shareLinkInput) {
+    dom.shareLinkInput.value = "";
+  }
   dom.card.classList.add("hidden");
+  dom.atisCard.classList.add("hidden");
+  dom.shareCard.classList.add("hidden");
   dom.toolsCard.classList.add("hidden");
+  dom.runwayAnalysisCard.classList.add("hidden");
+  dom.warningCard.classList.add("hidden");
   dom.riskCard.classList.add("hidden");
   dom.tafCard.classList.add("hidden");
+  if (dom.sharedBriefingNote) {
+    dom.sharedBriefingNote.classList.add("hidden");
+  }
   setStatus("Resolving airport...");
   dom.button.disabled = true;
 
@@ -95,8 +167,11 @@ dom.form.addEventListener("submit", async (event) => {
     if (!resolved) {
       showError("Airport not found. Try a different name or code.");
       setStatus("");
-      return;
+      updateFavoriteButtonState();
+      return false;
     }
+
+    state.currentResolved = resolved;
 
     setStatus(
       `Resolved to ${resolved.icao} — ${resolved.displayName || "Unknown"}`
@@ -106,18 +181,29 @@ dom.form.addEventListener("submit", async (event) => {
     if (!raw) {
       showError("METAR not found for this airport.");
       setStatus("");
-      return;
+      updateFavoriteButtonState();
+      return false;
     }
 
     const parsed = parseMetar(raw);
     state.currentMetar = parsed;
     renderMetar(parsed, resolved);
     dom.card.classList.remove("hidden");
+    dom.atisCard.classList.remove("hidden");
+    dom.shareCard.classList.remove("hidden");
 
     dom.toolsCard.classList.remove("hidden");
+    dom.runwayAnalysisCard.classList.remove("hidden");
+    dom.warningCard.classList.remove("hidden");
     const hasRunways = await updateRunwayList(resolved.icao);
     if (hasRunways) {
       updateRunwayCalculator();
+    } else {
+      state.selectedRunwayComponents = null;
+      updateRunwayAnalysis();
+      updateRunwayPerformanceHints();
+      updateAtisOutput();
+      updateSmartWarnings();
     }
 
     try {
@@ -141,17 +227,23 @@ dom.form.addEventListener("submit", async (event) => {
     dom.tafCard.classList.remove("hidden");
 
     updateRiskLayers();
+    updateSmartWarnings();
     dom.riskCard.classList.remove("hidden");
+    refreshSharePanel();
+    updateFavoriteButtonState();
+    renderFavorites();
+    return true;
   } catch (error) {
     showError(
       error instanceof Error
         ? error.message
         : "Unable to fetch METAR right now."
     );
+    return false;
   } finally {
     dom.button.disabled = false;
   }
-});
+}
 
 const handleIataHint = debounce(async () => {
   const query = dom.input.value.trim().toUpperCase();
@@ -175,6 +267,23 @@ const handleIataHint = debounce(async () => {
 
 dom.input.addEventListener("input", handleIataHint);
 dom.runwaySelect.addEventListener("change", updateRunwayCalculator);
+if (dom.favoriteBtn) {
+  dom.favoriteBtn.addEventListener("click", handleFavoriteToggle);
+}
+if (dom.shareBtn) {
+  dom.shareBtn.addEventListener("click", () => handleShareAsLink({
+    fromHeader: true,
+  }));
+}
+if (dom.copyTextBtn) {
+  dom.copyTextBtn.addEventListener("click", handleCopyAsText);
+}
+if (dom.shareLinkBtn) {
+  dom.shareLinkBtn.addEventListener("click", () => handleShareAsLink());
+}
+if (dom.favoritesList) {
+  dom.favoritesList.addEventListener("click", handleFavoritesClick);
+}
 
 dom.themeToggle.addEventListener("click", () => {
   const isDark = document.body.dataset.theme === "dark";
@@ -185,28 +294,30 @@ dom.themeToggle.addEventListener("click", () => {
 
 async function resolveAirport(query) {
   const cleaned = query.trim().toUpperCase();
-  if (/^[A-Z]{4}$/.test(cleaned)) {
-    return {
-      icao: cleaned,
-      displayName: cleaned,
-      airport: null,
-    };
-  }
+  const isIata = /^[A-Z]{3}$/.test(cleaned);
+  const isIcao = /^[A-Z]{4}$/.test(cleaned);
 
   const { iataMap, icaoMap, list } = await loadAirports();
 
-  if (/^[A-Z]{3}$/.test(cleaned)) {
+  if (isIata) {
     const airport = iataMap.get(cleaned);
     if (airport) {
       return formatResolved(airport);
     }
   }
 
-  if (/^[A-Z]{4}$/.test(cleaned)) {
+  if (isIcao) {
     const airport = icaoMap.get(cleaned);
     if (airport) {
       return formatResolved(airport);
     }
+
+    // Fallback for valid ICAO not present in lookup CSV.
+    return {
+      icao: cleaned,
+      displayName: cleaned,
+      airport: null,
+    };
   }
 
   const byName = findByName(query, list);
@@ -816,6 +927,9 @@ function renderMetar(metar, resolved) {
   }
   updateWindCompass(metar);
   updateCloudLayers(metar);
+  updateFavoriteButtonState();
+  updateRunwayPerformanceHints();
+  updateAtisOutput();
 }
 
 async function updateRunwayList(airportIdent) {
@@ -823,12 +937,19 @@ async function updateRunwayList(airportIdent) {
   dom.runwaySelect.disabled = true;
   dom.runwayNote.textContent = "Loading runway data...";
   setRunwayOutputs("—", "—", "Head/Tailwind", "Crosswind");
+  state.currentRunways = [];
+  state.selectedRunwayComponents = null;
+  updateRunwayPerformanceHints();
+  updateAtisOutput();
 
   try {
     const runwayMap = await loadRunways();
     const runways = runwayMap.get(airportIdent) || [];
     if (!runways.length) {
       dom.runwayNote.textContent = "No runway data available for this airport.";
+      updateRunwayAnalysis();
+      updateRunwayPerformanceHints();
+      updateAtisOutput();
       return false;
     }
 
@@ -837,6 +958,8 @@ async function updateRunwayList(airportIdent) {
       const bNum = runwaySortValue(b.ident, b.heading);
       return aNum - bNum;
     });
+
+    state.currentRunways = sorted;
 
     for (const runway of sorted) {
       const option = document.createElement("option");
@@ -852,9 +975,15 @@ async function updateRunwayList(airportIdent) {
     dom.runwaySelect.disabled = false;
     dom.runwaySelect.selectedIndex = 1;
     dom.runwayNote.textContent = "Select a runway to calculate components.";
+    updateRunwayAnalysis();
+    updateRunwayPerformanceHints();
+    updateAtisOutput();
     return true;
   } catch (error) {
     dom.runwayNote.textContent = "Unable to load runway data.";
+    updateRunwayAnalysis();
+    updateRunwayPerformanceHints();
+    updateAtisOutput();
     return false;
   }
 }
@@ -862,71 +991,384 @@ async function updateRunwayList(airportIdent) {
 function updateRunwayCalculator() {
   const wind = state.currentMetar?.wind;
   if (!wind) {
+    state.selectedRunwayComponents = null;
     dom.runwayNote.textContent = "Waiting for METAR wind.";
     setRunwayOutputs("—", "—", "Head/Tailwind", "Crosswind");
+    updateRunwayAnalysis();
+    updateRunwayPerformanceHints();
+    updateAtisOutput();
+    updateSmartWarnings();
     return;
   }
 
   const selection = dom.runwaySelect.value;
   const selectedOption = dom.runwaySelect.selectedOptions[0];
   if (!selection) {
+    state.selectedRunwayComponents = null;
     dom.runwayNote.textContent = "Select a runway to calculate components.";
     setRunwayOutputs("—", "—", "Head/Tailwind", "Crosswind");
+    updateRunwayAnalysis();
+    updateRunwayPerformanceHints();
+    updateAtisOutput();
+    updateSmartWarnings();
     return;
   }
 
   const heading = Number(selection);
   if (Number.isNaN(heading)) {
+    state.selectedRunwayComponents = null;
     dom.runwayNote.textContent = "Runway heading unavailable.";
     setRunwayOutputs("—", "—", "Head/Tailwind", "Crosswind");
+    updateRunwayAnalysis();
+    updateRunwayPerformanceHints();
+    updateAtisOutput();
+    updateSmartWarnings();
     return;
   }
 
-  if (wind.direction === "VRB") {
+  const runwayIdent = selectedOption?.dataset.ident || "Runway";
+  const components = calculateRunwayWindComponents(wind, heading);
+  state.selectedRunwayComponents = {
+    ...components,
+    heading,
+    ident: runwayIdent,
+  };
+
+  if (!components.valid) {
     dom.runwayNote.textContent = "Wind is variable; components are unreliable.";
     setRunwayOutputs("Variable", "Variable", "Head/Tailwind", "Crosswind");
+    updateRunwayAnalysis();
+    updateRunwayPerformanceHints();
+    updateAtisOutput();
+    updateSmartWarnings();
     return;
   }
-
-  const windDir = Number(wind.direction);
-  const speedKt = toKnots(wind.speed, wind.unit);
-  const gustKt = wind.gust ? toKnots(wind.gust, wind.unit) : null;
-  if (Number.isNaN(windDir) || Number.isNaN(speedKt)) {
-    dom.runwayNote.textContent = "Wind direction unavailable for components.";
-    setRunwayOutputs("—", "—", "Head/Tailwind", "Crosswind");
-    return;
-  }
-
-  const diff = angleDifference(windDir, heading);
-  const diffRad = (diff * Math.PI) / 180;
-  const head = speedKt * Math.cos(diffRad);
-  const cross = speedKt * Math.sin(diffRad);
-  const headLabel = head >= 0 ? "Headwind" : "Tailwind";
-  const crossLabel = cross >= 0 ? "Right crosswind" : "Left crosswind";
-  const runwayIdent = selectedOption?.dataset.ident || "Runway";
 
   dom.runwayNote.textContent = `${runwayIdent} (${String(
     Math.round(heading)
-  ).padStart(3, "0")}°) • Wind ${windDir}° at ${speedKt.toFixed(0)} kt`;
+  ).padStart(3, "0")}°) • Wind ${components.windDirection.toFixed(0)}° at ${components.speed.toFixed(0)} kt`;
 
-  dom.headArrow.textContent = head >= 0 ? "↑" : "↓";
-  dom.crossArrow.textContent = cross >= 0 ? "→" : "←";
+  dom.headArrow.textContent = components.headwind >= 0.01 ? "↑" : "↓";
+  dom.crossArrow.textContent = components.crosswindSign >= 0 ? "→" : "←";
 
-  dom.headLabel.textContent = headLabel;
-  dom.crossLabel.textContent = crossLabel;
+  dom.headLabel.textContent = components.headwind >= 0.01 ? "Headwind" : "Tailwind";
+  dom.crossLabel.textContent = components.crosswindSign >= 0 ? "Right crosswind" : "Left crosswind";
 
-  dom.headValue.textContent = `${Math.abs(head).toFixed(0)} kt`;
-  dom.crossValue.textContent = `${Math.abs(cross).toFixed(0)} kt`;
+  dom.headValue.textContent = `${formatComponentValue(Math.max(components.headwind, components.tailwind))} kt`;
+  dom.crossValue.textContent = `${formatComponentValue(components.crosswind)} kt`;
 
-  if (gustKt) {
-    const headGust = gustKt * Math.cos(diffRad);
-    const crossGust = gustKt * Math.sin(diffRad);
-    dom.headSub.textContent = `Max gust ${Math.abs(headGust).toFixed(0)} kt`;
-    dom.crossSub.textContent = `Max gust ${Math.abs(crossGust).toFixed(0)} kt`;
+  if (components.gust != null) {
+    dom.headSub.textContent = `Max gust ${formatComponentValue(Math.max(components.gustHeadwind, components.gustTailwind))} kt`;
+    dom.crossSub.textContent = `Max gust ${formatComponentValue(components.gustCrosswind)} kt`;
   } else {
-    dom.headSub.textContent = `Δ ${Math.round(diff)}° from runway`;
-    dom.crossSub.textContent = `Δ ${Math.round(diff)}° from runway`;
+    dom.headSub.textContent = `Δ ${Math.round(components.angleDelta)}° from runway`;
+    dom.crossSub.textContent = `Δ ${Math.round(components.angleDelta)}° from runway`;
   }
+
+  updateRunwayAnalysis();
+  updateRunwayPerformanceHints();
+  updateAtisOutput();
+  updateSmartWarnings();
+}
+
+function updateRunwayPerformanceHints() {
+  if (!dom.runwayPerformanceList) {
+    return;
+  }
+
+  const hints = generateRunwayPerformanceHints();
+  renderRunwayPerformanceHints(hints);
+}
+
+function generateRunwayPerformanceHints() {
+  const metar = state.currentMetar;
+  if (!metar) {
+    return [{ level: "info", message: "Load METAR to generate runway performance hints." }];
+  }
+
+  const hints = [];
+  const raw = ` ${metar.raw || ""} `;
+  const hasRain = /(?:^|\s)[+-]?(RA|DZ|SHRA|TSRA|VCSH)(?:\s|=|$)/.test(raw);
+  const hasSnow = /(?:^|\s)[+-]?(SN|SG|PL|IC)(?:\s|=|$)/.test(raw);
+  const hasFreezing = /(?:^|\s)[+-]?FZ(RA|DZ|FG)(?:\s|=|$)/.test(raw);
+
+  if (hasSnow || hasFreezing) {
+    hints.push({
+      level: "warning",
+      message: "Snow or freezing precipitation detected. Reduced braking expected and landing distance may increase.",
+    });
+  } else if (hasRain) {
+    hints.push({
+      level: "caution",
+      message: "Rain/wet conditions likely. Reduced braking expected.",
+    });
+  }
+
+  if (metar.temp != null) {
+    if (metar.temp >= 35) {
+      hints.push({
+        level: "warning",
+        message: `High temperature ${metar.temp}°C. Expect longer takeoff and landing distance.`,
+      });
+    } else if (metar.temp >= 30) {
+      hints.push({
+        level: "caution",
+        message: `Warm temperature ${metar.temp}°C may slightly increase runway distance required.`,
+      });
+    }
+  }
+
+  const qnh = metar.pressure?.hPa;
+  if (qnh != null) {
+    if (qnh <= 995) {
+      hints.push({
+        level: "warning",
+        message: `Low pressure QNH ${qnh.toFixed(0)} hPa. Verify altimeter and performance corrections.`,
+      });
+    } else if (qnh <= 1005) {
+      hints.push({
+        level: "caution",
+        message: `Lower pressure QNH ${qnh.toFixed(0)} hPa may increase density altitude.`,
+      });
+    }
+  }
+
+  const elevationFt = state.currentResolved?.airport?.elevationFt;
+  const pressureInHg = metar.pressure?.inHg;
+  if (Number.isFinite(elevationFt) && metar.temp != null && pressureInHg != null) {
+    const pressureAltitude = elevationFt + (29.92 - pressureInHg) * 1000;
+    const isaTemp = 15 - 2 * (elevationFt / 1000);
+    const densityAltitude = pressureAltitude + 120 * (metar.temp - isaTemp);
+
+    if (densityAltitude >= 6000) {
+      hints.push({
+        level: "warning",
+        message: `High density altitude ${Math.round(densityAltitude).toLocaleString()} ft. Expect reduced climb and longer runway required.`,
+      });
+    } else if (densityAltitude >= 3000) {
+      hints.push({
+        level: "caution",
+        message: `Density altitude around ${Math.round(densityAltitude).toLocaleString()} ft. Review runway performance margins.`,
+      });
+    }
+  }
+
+  const selected = state.selectedRunwayComponents;
+  if (selected?.valid) {
+    const crosswind = Math.max(selected.crosswind, selected.gustCrosswind || 0);
+    const tailwind = Math.max(selected.tailwind, selected.gustTailwind || 0);
+
+    if (crosswind >= 20) {
+      hints.push({
+        level: "warning",
+        message: `Selected runway ${selected.ident} crosswind is strong (${formatComponentValue(crosswind)} kt).`,
+      });
+    } else if (crosswind >= 12) {
+      hints.push({
+        level: "caution",
+        message: `Selected runway ${selected.ident} crosswind is elevated (${formatComponentValue(crosswind)} kt).`,
+      });
+    }
+
+    if (tailwind >= 8) {
+      hints.push({
+        level: "warning",
+        message: `Tailwind on runway ${selected.ident} is ${formatComponentValue(tailwind)} kt. Long landing distance required.`,
+      });
+    } else if (tailwind >= 4) {
+      hints.push({
+        level: "caution",
+        message: `Tailwind on runway ${selected.ident} may increase stopping distance.`,
+      });
+    }
+
+    if ((hasRain || hasSnow || hasFreezing) && (tailwind >= 3 || crosswind >= 10)) {
+      hints.push({
+        level: "warning",
+        message: `Wet/contaminated runway combined with adverse wind on ${selected.ident}. Use conservative margins.`,
+      });
+    }
+  } else if (state.currentRunways.length > 0) {
+    hints.push({
+      level: "info",
+      message: "Select a runway for runway-specific tailwind and crosswind performance hints.",
+    });
+  }
+
+  if (!hints.length) {
+    hints.push({
+      level: "info",
+      message: "No significant runway performance penalties identified from the current METAR.",
+    });
+  }
+
+  hints.sort((a, b) => warningSeverityRank(b.level) - warningSeverityRank(a.level));
+  return hints;
+}
+
+function renderRunwayPerformanceHints(hints) {
+  if (!dom.runwayPerformanceList) {
+    return;
+  }
+
+  dom.runwayPerformanceList.innerHTML = "";
+
+  for (const hint of hints) {
+    const item = document.createElement("article");
+    item.className = `performance-hint performance-${hint.level}`;
+
+    const level = document.createElement("span");
+    level.className = "performance-level";
+    level.textContent = hint.level;
+
+    const message = document.createElement("p");
+    message.className = "warning-text";
+    message.textContent = hint.message;
+
+    item.appendChild(level);
+    item.appendChild(message);
+    dom.runwayPerformanceList.appendChild(item);
+  }
+}
+
+function updateAtisOutput() {
+  if (!dom.atisOutput || !dom.atisCard) {
+    return;
+  }
+
+  if (!state.currentMetar) {
+    dom.atisCard.classList.add("hidden");
+    dom.atisOutput.textContent = "Waiting for METAR data.";
+    return;
+  }
+
+  dom.atisCard.classList.remove("hidden");
+  dom.atisOutput.textContent = buildAtisOutput();
+}
+
+function buildAtisOutput() {
+  const metar = state.currentMetar;
+  if (!metar) {
+    return "No METAR data available.";
+  }
+
+  const airportName = state.currentResolved?.airport?.name || state.currentResolved?.icao || metar.station;
+  const runwaySentence = atisRunwaySentence();
+  const windSentence = atisWindSentence(metar.wind);
+  const visibilitySentence = atisVisibilitySentence(metar.visibility);
+  const cloudSentence = atisCloudSentence(metar.clouds);
+  const temp = metar.temp != null ? `${metar.temp} degrees Celsius` : "temperature unavailable";
+  const dew = metar.dew != null ? `${metar.dew} degrees Celsius` : "dew point unavailable";
+  const qnh = metar.pressure?.hPa != null
+    ? `QNH ${Math.round(metar.pressure.hPa)} hectopascals`
+    : "QNH unavailable";
+
+  return `ATIS-style advisory for ${airportName}. ${runwaySentence} ${windSentence}, ${visibilitySentence}, ${cloudSentence}. Temperature ${temp}, dew point ${dew}, ${qnh}.`;
+}
+
+function atisRunwaySentence() {
+  const selected = state.selectedRunwayComponents;
+  if (selected?.ident) {
+    return `Selected runway ${selected.ident}`;
+  }
+
+  let best = state.bestRunway;
+  if (!best) {
+    const evaluation = buildRunwayEvaluation();
+    if (evaluation.bestIndex >= 0) {
+      const row = evaluation.rows[evaluation.bestIndex];
+      best = {
+        ident: row.runway.ident,
+        heading: row.runway.heading,
+        components: row.components,
+        condition: row.condition,
+      };
+      state.bestRunway = best;
+    }
+  }
+
+  if (best?.ident) {
+    return `Recommended runway ${best.ident}`;
+  }
+  return "Runway recommendation unavailable";
+}
+
+function atisWindSentence(wind) {
+  if (!wind) {
+    return "Wind unavailable";
+  }
+  const speedKt = Math.round(toKnots(wind.speed, wind.unit));
+  if (wind.direction === "VRB") {
+    if (wind.gust != null) {
+      const gustKt = Math.round(toKnots(wind.gust, wind.unit));
+      return `wind variable at ${speedKt} knots, gusting ${gustKt}`;
+    }
+    return `wind variable at ${speedKt} knots`;
+  }
+
+  const direction = String(Number(wind.direction)).padStart(3, "0");
+  if (wind.gust != null) {
+    const gustKt = Math.round(toKnots(wind.gust, wind.unit));
+    return `wind ${direction} degrees at ${speedKt} knots, gusting ${gustKt}`;
+  }
+  return `wind ${direction} degrees at ${speedKt} knots`;
+}
+
+function atisVisibilitySentence(visibility) {
+  if (!visibility) {
+    return "visibility unavailable";
+  }
+  if (visibility.raw === "CAVOK") {
+    return "visibility 10 kilometers or more";
+  }
+
+  if (visibility.meters != null) {
+    const km = visibility.meters >= 10000
+      ? "10"
+      : (visibility.meters / 1000).toFixed(1);
+    return `visibility ${km} kilometers`;
+  }
+
+  if (visibility.miles != null) {
+    return `visibility ${visibility.miles.toFixed(1)} statute miles`;
+  }
+
+  return "visibility unavailable";
+}
+
+function atisCloudSentence(clouds) {
+  if (!Array.isArray(clouds) || clouds.length === 0) {
+    return "sky clear";
+  }
+
+  if (clouds.some((layer) => ["CLR", "SKC", "NSC", "NCD"].includes(layer.code))) {
+    return "sky clear";
+  }
+  if (clouds.some((layer) => layer.code === "CAVOK")) {
+    return "clouds and visibility OK";
+  }
+
+  const codeMap = {
+    FEW: "few clouds",
+    SCT: "scattered clouds",
+    BKN: "broken clouds",
+    OVC: "overcast",
+    VV: "vertical visibility",
+  };
+
+  const parts = clouds
+    .filter((layer) => codeMap[layer.code])
+    .map((layer) => {
+      if (layer.heightFt) {
+        return `${codeMap[layer.code]} at ${layer.heightFt.toLocaleString()} feet`;
+      }
+      return codeMap[layer.code];
+    });
+
+  if (!parts.length) {
+    return "cloud data unavailable";
+  }
+  return parts.join(", ");
 }
 
 function setRunwayOutputs(headValue, crossValue, headLabel, crossLabel) {
@@ -938,6 +1380,432 @@ function setRunwayOutputs(headValue, crossValue, headLabel, crossLabel) {
   dom.crossLabel.textContent = crossLabel;
   dom.headSub.textContent = "--";
   dom.crossSub.textContent = "--";
+}
+
+function calculateRunwayWindComponents(wind, heading) {
+  if (!wind || wind.direction === "VRB") {
+    return {
+      valid: false,
+      angleDelta: null,
+      windDirection: null,
+      speed: toKnots(wind?.speed || 0, wind?.unit),
+      gust: wind?.gust != null ? toKnots(wind.gust, wind.unit) : null,
+      headwind: 0,
+      tailwind: 0,
+      crosswind: 0,
+      crosswindSign: 1,
+      gustHeadwind: 0,
+      gustTailwind: 0,
+      gustCrosswind: 0,
+    };
+  }
+
+  const windDirection = Number(wind.direction);
+  const speed = toKnots(wind.speed, wind.unit);
+  const gust = wind.gust != null ? toKnots(wind.gust, wind.unit) : null;
+  if (Number.isNaN(windDirection) || Number.isNaN(speed)) {
+    return {
+      valid: false,
+      angleDelta: null,
+      windDirection: null,
+      speed: 0,
+      gust: null,
+      headwind: 0,
+      tailwind: 0,
+      crosswind: 0,
+      crosswindSign: 1,
+      gustHeadwind: 0,
+      gustTailwind: 0,
+      gustCrosswind: 0,
+    };
+  }
+
+  const angleDelta = angleDifference(windDirection, heading);
+  const rad = (angleDelta * Math.PI) / 180;
+  const head = speed * Math.cos(rad);
+  const cross = speed * Math.sin(rad);
+
+  const gustHead = gust != null ? gust * Math.cos(rad) : 0;
+  const gustCross = gust != null ? gust * Math.sin(rad) : 0;
+
+  return {
+    valid: true,
+    angleDelta,
+    windDirection,
+    speed,
+    gust,
+    headwind: Math.max(head, 0),
+    tailwind: Math.max(-head, 0),
+    crosswind: Math.abs(cross),
+    crosswindSign: cross >= 0 ? 1 : -1,
+    gustHeadwind: Math.max(gustHead, 0),
+    gustTailwind: Math.max(-gustHead, 0),
+    gustCrosswind: Math.abs(gustCross),
+  };
+}
+
+function formatComponentValue(value) {
+  return Number.isFinite(value) ? Math.abs(value).toFixed(0) : "0";
+}
+
+function classifyRunwayCondition(components) {
+  if (!components?.valid) {
+    return {
+      level: "marginal",
+      label: "Marginal",
+      score: 999,
+    };
+  }
+
+  const effectiveCrosswind = Math.max(components.crosswind, components.gustCrosswind || 0);
+  const effectiveTailwind = Math.max(components.tailwind, components.gustTailwind || 0);
+
+  let score = effectiveCrosswind + effectiveTailwind * 3;
+  let level = "good";
+  let label = "Good";
+
+  if (effectiveTailwind >= 10 || effectiveCrosswind >= 25) {
+    level = "unsafe";
+    label = "Unsafe";
+    score += 100;
+  } else if (effectiveTailwind >= 5 || effectiveCrosswind >= 15) {
+    level = "marginal";
+    label = "Marginal";
+    score += 30;
+  }
+
+  return { level, label, score };
+}
+
+function buildRunwayEvaluation() {
+  const runways = state.currentRunways || [];
+  const wind = state.currentMetar?.wind;
+  if (!runways.length || !wind) {
+    return { rows: [], bestIndex: -1 };
+  }
+
+  const rows = runways.map((runway) => {
+    const components = calculateRunwayWindComponents(wind, runway.heading);
+    const condition = classifyRunwayCondition(components);
+    return {
+      runway,
+      components,
+      condition,
+    };
+  });
+
+  let bestIndex = -1;
+  let bestScore = Number.POSITIVE_INFINITY;
+  rows.forEach((row, index) => {
+    if (row.condition.score < bestScore) {
+      bestScore = row.condition.score;
+      bestIndex = index;
+    }
+  });
+
+  return { rows, bestIndex };
+}
+
+function updateRunwayAnalysis() {
+  if (!dom.runwayList) {
+    return;
+  }
+
+  const { rows, bestIndex } = buildRunwayEvaluation();
+  dom.runwayList.innerHTML = "";
+
+  if (!rows.length) {
+    state.bestRunway = state.sharedSnapshot?.bestRunway || null;
+    if (dom.runwayAnalysisMeta) {
+      dom.runwayAnalysisMeta.textContent = "Runway analysis is unavailable for this airport.";
+    }
+    const empty = document.createElement("p");
+    empty.className = "runway-components";
+    empty.textContent = "No runway wind analysis available.";
+    dom.runwayList.appendChild(empty);
+    return;
+  }
+
+  const selectedIdent = dom.runwaySelect.selectedOptions[0]?.dataset.ident || "";
+
+  rows.forEach((row, index) => {
+    const item = document.createElement("article");
+    item.className = `runway-row runway-rate-${row.condition.level}`;
+    if (index === bestIndex) {
+      item.classList.add("runway-best");
+    }
+
+    const ident = document.createElement("p");
+    ident.className = "runway-ident";
+    ident.textContent = `RWY ${row.runway.ident} (${String(Math.round(row.runway.heading)).padStart(3, "0")}°)`;
+
+    const components = document.createElement("p");
+    components.className = "runway-components";
+    if (!row.components.valid) {
+      components.textContent = "Head/Tail: variable • Crosswind: variable";
+    } else {
+      const headOrTail = row.components.headwind >= 0.01
+        ? `Head ${formatComponentValue(row.components.headwind)} kt`
+        : `Tail ${formatComponentValue(row.components.tailwind)} kt`;
+      components.textContent = `${headOrTail} • Cross ${formatComponentValue(row.components.crosswind)} kt`;
+    }
+
+    const scoreWrap = document.createElement("div");
+    scoreWrap.className = "runway-score";
+
+    const badge = document.createElement("span");
+    badge.className = `runway-rate runway-rate-${row.condition.level}`;
+    badge.textContent = row.condition.label;
+    scoreWrap.appendChild(badge);
+
+    if (index === bestIndex) {
+      const best = document.createElement("span");
+      best.className = "runway-best-label";
+      best.textContent = "Best";
+      scoreWrap.appendChild(best);
+    } else if (selectedIdent && selectedIdent === row.runway.ident) {
+      const selected = document.createElement("span");
+      selected.className = "runway-best-label";
+      selected.textContent = "Selected";
+      scoreWrap.appendChild(selected);
+    }
+
+    item.appendChild(ident);
+    item.appendChild(components);
+    item.appendChild(scoreWrap);
+    dom.runwayList.appendChild(item);
+  });
+
+  const best = rows[bestIndex] || null;
+  state.bestRunway = best
+    ? {
+      ident: best.runway.ident,
+      heading: best.runway.heading,
+      components: best.components,
+      condition: best.condition,
+    }
+    : null;
+
+  if (dom.runwayAnalysisMeta && best) {
+    dom.runwayAnalysisMeta.textContent = `Best runway: ${best.runway.ident} (${String(
+      Math.round(best.runway.heading)
+    ).padStart(3, "0")}°) based on current wind.`;
+  }
+}
+
+function warningSeverityRank(level) {
+  const map = { info: 1, caution: 2, warning: 3, critical: 4 };
+  return map[level] || 0;
+}
+
+function makeWarning(level, icon, message) {
+  return { level, icon, message };
+}
+
+function generateSmartWarnings() {
+  const warnings = [];
+  const metar = state.currentMetar;
+  if (!metar) {
+    return warnings;
+  }
+
+  const visibilitySm = metar.visibility?.miles;
+  if (visibilitySm != null) {
+    if (visibilitySm < 1) {
+      warnings.push(makeWarning("critical", "VIS", "Very low visibility for approach and landing."));
+    } else if (visibilitySm < 3) {
+      warnings.push(makeWarning("warning", "VIS", "Visibility is below common VFR approach comfort levels."));
+    } else if (visibilitySm < 5) {
+      warnings.push(makeWarning("caution", "VIS", "Visibility is reduced; verify approach minima."));
+    }
+  }
+
+  const ceiling = metar.ceilingFt;
+  if (ceiling != null) {
+    if (ceiling < 500) {
+      warnings.push(makeWarning("critical", "CLD", "Ceiling below 500 ft indicates very poor approach conditions."));
+    } else if (ceiling < 1000) {
+      warnings.push(makeWarning("warning", "CLD", "Low cloud ceiling near IFR thresholds."));
+    } else if (ceiling < 2000) {
+      warnings.push(makeWarning("caution", "CLD", "Cloud ceiling is lowered; monitor trend."));
+    }
+  }
+
+  const selected = state.selectedRunwayComponents;
+  if (selected?.valid) {
+    const cross = Math.max(selected.crosswind, selected.gustCrosswind || 0);
+    const tail = Math.max(selected.tailwind, selected.gustTailwind || 0);
+
+    if (cross >= 25) {
+      warnings.push(makeWarning("critical", "WND", `Strong crosswind on runway ${selected.ident}: ${formatComponentValue(cross)} kt.`));
+    } else if (cross >= 18) {
+      warnings.push(makeWarning("warning", "WND", `Crosswind on runway ${selected.ident} is elevated: ${formatComponentValue(cross)} kt.`));
+    } else if (cross >= 12) {
+      warnings.push(makeWarning("caution", "WND", `Crosswind on runway ${selected.ident}: ${formatComponentValue(cross)} kt.`));
+    }
+
+    if (tail >= 10) {
+      warnings.push(makeWarning("critical", "WND", `Tailwind exceeds safe margins on runway ${selected.ident}: ${formatComponentValue(tail)} kt.`));
+    } else if (tail >= 5) {
+      warnings.push(makeWarning("warning", "WND", `Tailwind may be limiting on runway ${selected.ident}: ${formatComponentValue(tail)} kt.`));
+    } else if (tail >= 2) {
+      warnings.push(makeWarning("caution", "WND", `Light tailwind present on runway ${selected.ident}.`));
+    }
+  } else if (state.currentRunways.length > 0) {
+    warnings.push(makeWarning("info", "WND", "Select a runway to evaluate runway-specific crosswind and tailwind warnings."));
+  }
+
+  if (metar.wind?.gust != null) {
+    const gustSpread = toKnots(metar.wind.gust, metar.wind.unit) - toKnots(metar.wind.speed, metar.wind.unit);
+    if (gustSpread >= 12) {
+      warnings.push(makeWarning("warning", "WND", `Gust spread is large (${formatComponentValue(gustSpread)} kt), winds may be unstable.`));
+    } else if (gustSpread >= 6) {
+      warnings.push(makeWarning("caution", "WND", `Moderate gust spread (${formatComponentValue(gustSpread)} kt).`));
+    }
+  }
+
+  const icing = assessIcing(metar);
+  if (icing.level === "High") {
+    warnings.push(makeWarning("warning", "ICE", "Possible icing conditions in current weather profile."));
+  } else if (icing.level === "Moderate") {
+    warnings.push(makeWarning("caution", "ICE", "Potential icing conditions; verify temperatures and moisture."));
+  }
+
+  const turbulence = assessTurbulence(metar);
+  if (turbulence.level === "High") {
+    warnings.push(makeWarning("warning", "TURB", "Possible turbulence due to wind, gusts, and cloud structure."));
+  } else if (turbulence.level === "Moderate") {
+    warnings.push(makeWarning("caution", "TURB", "Moderate turbulence risk from current wind profile."));
+  }
+
+  if (state.currentTaf?.blocks?.length) {
+    const forecast = summarizeTafHazards(state.currentTaf);
+    if (forecast.minVisibility != null && forecast.minVisibility < 3) {
+      warnings.push(makeWarning("caution", "VIS", `TAF indicates visibility may drop to ${forecast.minVisibility.toFixed(1)} sm.`));
+    }
+    if (forecast.minCeiling != null && forecast.minCeiling < 1000) {
+      warnings.push(makeWarning("warning", "CLD", `TAF indicates low ceiling down to ${Math.round(forecast.minCeiling)} ft.`));
+    }
+    if (forecast.maxWind != null && forecast.maxWind >= 25) {
+      warnings.push(makeWarning("caution", "WND", `TAF shows stronger winds up to ${Math.round(forecast.maxWind)} kt.`));
+    }
+    if (forecast.hasWindShear) {
+      warnings.push(makeWarning("warning", "WND", "TAF contains low-level wind shear indications."));
+    }
+    if (forecast.hasPrecip && forecast.coldMoistureLikely) {
+      warnings.push(makeWarning("caution", "ICE", "TAF moisture with low temperatures suggests icing potential."));
+    }
+  }
+
+  warnings.sort((a, b) => warningSeverityRank(b.level) - warningSeverityRank(a.level));
+  return warnings;
+}
+
+function summarizeTafHazards(taf) {
+  const summary = {
+    minVisibility: null,
+    minCeiling: null,
+    maxWind: null,
+    hasWindShear: false,
+    hasPrecip: false,
+    coldMoistureLikely: false,
+  };
+
+  for (const block of taf.blocks || []) {
+    if (block.visibility?.miles != null) {
+      summary.minVisibility = summary.minVisibility == null
+        ? block.visibility.miles
+        : Math.min(summary.minVisibility, block.visibility.miles);
+    }
+
+    if (block.ceilingFt != null) {
+      summary.minCeiling = summary.minCeiling == null
+        ? block.ceilingFt
+        : Math.min(summary.minCeiling, block.ceilingFt);
+    }
+
+    if (block.wind) {
+      const speed = toKnots(block.wind.speed, block.wind.unit);
+      const gust = block.wind.gust != null ? toKnots(block.wind.gust, block.wind.unit) : speed;
+      const maxBlockWind = Math.max(speed, gust);
+      summary.maxWind = summary.maxWind == null
+        ? maxBlockWind
+        : Math.max(summary.maxWind, maxBlockWind);
+    }
+
+    summary.hasWindShear = summary.hasWindShear || !!block.hasWindShear;
+    summary.hasPrecip = summary.hasPrecip || !!block.hasPrecip;
+  }
+
+  const lowTemp = taf.temps?.min ?? state.currentMetar?.temp ?? null;
+  summary.coldMoistureLikely = summary.hasPrecip && lowTemp != null && lowTemp <= 3 && lowTemp >= -15;
+  return summary;
+}
+
+function warningIconSymbol(code) {
+  const map = {
+    WND: "↯",
+    VIS: "◎",
+    CLD: "☁",
+    ICE: "❄",
+    TURB: "≈",
+    INFO: "i",
+  };
+  return map[code] || "!";
+}
+
+function renderWarnings(warnings) {
+  if (!dom.warningList) {
+    return;
+  }
+
+  dom.warningList.innerHTML = "";
+
+  const items = warnings.length
+    ? warnings
+    : [makeWarning("info", "INFO", "No significant operational warnings detected from the latest data.")];
+
+  for (const warning of items) {
+    const item = document.createElement("article");
+    item.className = `warning-item warning-${warning.level}`;
+
+    const icon = document.createElement("span");
+    icon.className = "warning-icon";
+    icon.textContent = warningIconSymbol(warning.icon);
+    icon.title = warning.icon;
+
+    const text = document.createElement("p");
+    text.className = "warning-text";
+    text.textContent = warning.message;
+
+    const level = document.createElement("span");
+    level.className = "warning-level";
+    level.textContent = warning.level;
+
+    item.appendChild(icon);
+    item.appendChild(text);
+    item.appendChild(level);
+    dom.warningList.appendChild(item);
+  }
+}
+
+function updateSmartWarnings() {
+  if (!dom.warningCard || !dom.warningList) {
+    return;
+  }
+
+  if (!state.currentMetar) {
+    dom.warningCard.classList.add("hidden");
+    state.currentWarnings = [];
+    refreshSharePanel();
+    return;
+  }
+
+  dom.warningCard.classList.remove("hidden");
+  const warnings = generateSmartWarnings();
+  state.currentWarnings = warnings;
+  renderWarnings(warnings);
+  refreshSharePanel();
 }
 
 function angleDifference(windDir, runwayHeading) {
@@ -969,6 +1837,7 @@ function renderTaf(taf) {
 
   const series = buildTafSeries(taf.blocks, taf.validStart, taf.validEnd);
   updateCharts(series);
+  updateSmartWarnings();
 }
 
 function buildTafSeries(blocks, validStart, validEnd) {
@@ -1885,6 +2754,7 @@ function parseAirports(text) {
   const municipalityIdx = index("municipality");
   const isoIdx = index("iso_country");
   const iataIdx = index("iata_code");
+  const elevationIdx = index("elevation_ft");
   const typeIdx = index("type");
 
   const list = [];
@@ -1902,12 +2772,15 @@ function parseAirports(text) {
       continue;
     }
 
+    const elevationCell = row[elevationIdx];
+    const elevationRaw = Number(elevationCell);
     const airport = {
       ident,
       name: row[nameIdx] || "",
       municipality: row[municipalityIdx] || "",
       iso_country: row[isoIdx] || "",
       iata: row[iataIdx]?.toUpperCase() || "",
+      elevationFt: elevationCell === "" || Number.isNaN(elevationRaw) ? null : elevationRaw,
       type,
     };
     airport.nameNorm = normalize(airport.name);
@@ -2022,6 +2895,1062 @@ function debounce(fn, delay) {
     timer = setTimeout(() => fn(...args), delay);
   };
 }
+
+function initFavorites() {
+  state.favorites = loadFavoritesFromStorage();
+  renderFavorites();
+  updateFavoriteButtonState();
+}
+
+function loadFavoritesFromStorage() {
+  const fromLocal = parseFavoritesPayload(localStorage.getItem(FAVORITES_STORAGE_KEY));
+  const fromAndroid = readAndroidFavorites();
+  const source = fromAndroid.length ? fromAndroid : fromLocal;
+  const sanitized = sanitizeFavorites(source);
+  if (!fromAndroid.length && sanitized.length !== fromLocal.length) {
+    localStorage.setItem(FAVORITES_STORAGE_KEY, JSON.stringify(sanitized));
+  }
+  if (fromAndroid.length) {
+    localStorage.setItem(FAVORITES_STORAGE_KEY, JSON.stringify(sanitized));
+  }
+  return sanitized;
+}
+
+function saveFavoritesToStorage() {
+  const payload = JSON.stringify(state.favorites);
+  localStorage.setItem(FAVORITES_STORAGE_KEY, payload);
+  writeAndroidFavorites(payload);
+}
+
+function parseFavoritesPayload(payload) {
+  if (!payload) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(payload);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function sanitizeFavorites(list) {
+  const unique = new Map();
+  for (const item of Array.isArray(list) ? list : []) {
+    const entry = sanitizeFavoriteEntry(item);
+    if (!entry) {
+      continue;
+    }
+    unique.set(entry.icao, entry);
+  }
+  return Array.from(unique.values()).slice(0, FAVORITES_MAX_ITEMS);
+}
+
+function sanitizeFavoriteEntry(entry) {
+  if (!entry || typeof entry !== "object") {
+    return null;
+  }
+  const icao = String(entry.icao || entry.ident || "").toUpperCase().trim();
+  if (!/^[A-Z]{4}$/.test(icao)) {
+    return null;
+  }
+  const name = String(entry.name || entry.displayName || icao).trim() || icao;
+  const municipality = String(entry.municipality || "").trim();
+  const country = String(entry.country || entry.iso_country || "").trim();
+  const iata = String(entry.iata || "").toUpperCase().trim();
+  return {
+    icao,
+    name,
+    municipality,
+    country,
+    iata,
+  };
+}
+
+function readAndroidFavorites() {
+  const providers = [
+    globalThis.AndroidStorage,
+    globalThis.METARLensAndroid,
+    globalThis.Android,
+  ];
+
+  for (const provider of providers) {
+    if (!provider) {
+      continue;
+    }
+    const reader = provider.getFavorites || provider.readFavorites;
+    if (typeof reader !== "function") {
+      continue;
+    }
+    try {
+      const value = reader.call(provider);
+      if (Array.isArray(value)) {
+        return sanitizeFavorites(value);
+      }
+      if (typeof value === "string") {
+        return sanitizeFavorites(parseFavoritesPayload(value));
+      }
+    } catch {
+      // Ignore bridge read failures and continue local-only.
+    }
+  }
+
+  return [];
+}
+
+function writeAndroidFavorites(payload) {
+  const providers = [
+    globalThis.AndroidStorage,
+    globalThis.METARLensAndroid,
+    globalThis.Android,
+  ];
+
+  for (const provider of providers) {
+    if (!provider) {
+      continue;
+    }
+    const writer = provider.setFavorites || provider.saveFavorites;
+    if (typeof writer !== "function") {
+      continue;
+    }
+    try {
+      writer.call(provider, payload);
+    } catch {
+      // Ignore bridge write failures and keep local storage as source of truth.
+    }
+  }
+
+  if (globalThis.ReactNativeWebView?.postMessage) {
+    try {
+      globalThis.ReactNativeWebView.postMessage(
+        JSON.stringify({ type: "metar-favorites", payload })
+      );
+    } catch {
+      // Ignore optional bridge errors.
+    }
+  }
+}
+
+function renderFavorites() {
+  if (!dom.favoritesList || !dom.favoritesEmpty) {
+    return;
+  }
+
+  dom.favoritesList.innerHTML = "";
+
+  if (!state.favorites.length) {
+    dom.favoritesEmpty.classList.remove("hidden");
+    return;
+  }
+
+  dom.favoritesEmpty.classList.add("hidden");
+  const activeIcao = state.currentResolved?.icao || "";
+
+  for (const favorite of state.favorites) {
+    const item = document.createElement("div");
+    item.className = "favorite-item";
+
+    const loadBtn = document.createElement("button");
+    loadBtn.type = "button";
+    loadBtn.className = "favorite-load";
+    if (favorite.icao === activeIcao) {
+      loadBtn.classList.add("active");
+    }
+    loadBtn.dataset.icao = favorite.icao;
+
+    const codeLabel = favorite.iata
+      ? `${favorite.iata} / ${favorite.icao}`
+      : favorite.icao;
+    loadBtn.textContent = `${favorite.name} (${codeLabel})`;
+
+    const removeBtn = document.createElement("button");
+    removeBtn.type = "button";
+    removeBtn.className = "favorite-remove";
+    removeBtn.dataset.icao = favorite.icao;
+    removeBtn.setAttribute("aria-label", `Remove ${favorite.icao} from favorites`);
+    removeBtn.textContent = "×";
+
+    item.appendChild(loadBtn);
+    item.appendChild(removeBtn);
+    dom.favoritesList.appendChild(item);
+  }
+}
+
+function buildFavoriteFromResolved(resolved) {
+  const airport = resolved?.airport;
+  return sanitizeFavoriteEntry({
+    icao: resolved?.icao,
+    name: airport?.name || resolved?.displayName || resolved?.icao,
+    municipality: airport?.municipality || "",
+    country: airport?.iso_country || "",
+    iata: airport?.iata || "",
+  });
+}
+
+function isFavorite(icao) {
+  return state.favorites.some((item) => item.icao === icao);
+}
+
+function updateFavoriteButtonState() {
+  if (!dom.favoriteBtn) {
+    return;
+  }
+
+  const icao = state.currentResolved?.icao;
+  if (!icao) {
+    dom.favoriteBtn.disabled = true;
+    dom.favoriteBtn.classList.remove("active");
+    dom.favoriteBtn.textContent = "☆ Save Favorite";
+    return;
+  }
+
+  dom.favoriteBtn.disabled = false;
+  const active = isFavorite(icao);
+  dom.favoriteBtn.classList.toggle("active", active);
+  dom.favoriteBtn.textContent = active ? "★ Favorite Saved" : "☆ Save Favorite";
+}
+
+async function handleFavoriteToggle() {
+  const icao = state.currentResolved?.icao;
+  if (!icao) {
+    return;
+  }
+
+  if (isFavorite(icao)) {
+    state.favorites = state.favorites.filter((item) => item.icao !== icao);
+    setShareStatus(`Removed ${icao} from favorites.`);
+  } else {
+    const entry = buildFavoriteFromResolved(state.currentResolved);
+    if (entry) {
+      state.favorites = [entry, ...state.favorites.filter((item) => item.icao !== entry.icao)]
+        .slice(0, FAVORITES_MAX_ITEMS);
+      setShareStatus(`Saved ${icao} to favorites.`);
+    }
+  }
+
+  saveFavoritesToStorage();
+  renderFavorites();
+  updateFavoriteButtonState();
+}
+
+async function handleFavoritesClick(event) {
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) {
+    return;
+  }
+
+  const loadButton = target.closest(".favorite-load");
+  if (loadButton instanceof HTMLButtonElement) {
+    const icao = loadButton.dataset.icao;
+    if (!icao) {
+      return;
+    }
+    dom.input.value = icao;
+    await loadAirportWeather(icao);
+    return;
+  }
+
+  const removeButton = target.closest(".favorite-remove");
+  if (removeButton instanceof HTMLButtonElement) {
+    const icao = removeButton.dataset.icao;
+    if (!icao) {
+      return;
+    }
+    state.favorites = state.favorites.filter((item) => item.icao !== icao);
+    saveFavoritesToStorage();
+    renderFavorites();
+    updateFavoriteButtonState();
+    setShareStatus(`Removed ${icao} from favorites.`);
+  }
+}
+
+function setShareStatus(message, timeoutMs = 2600) {
+  if (!dom.shareStatus) {
+    return;
+  }
+
+  dom.shareStatus.textContent = message;
+
+  if (state.shareStatusTimer) {
+    clearTimeout(state.shareStatusTimer);
+    state.shareStatusTimer = null;
+  }
+
+  if (message && timeoutMs > 0) {
+    state.shareStatusTimer = setTimeout(() => {
+      if (dom.shareStatus.textContent === message) {
+        dom.shareStatus.textContent = "";
+      }
+    }, timeoutMs);
+  }
+}
+
+function setSharePanelStatus(message, timeoutMs = 2600) {
+  if (!dom.sharePanelStatus) {
+    return;
+  }
+
+  dom.sharePanelStatus.textContent = message;
+
+  if (state.sharePanelTimer) {
+    clearTimeout(state.sharePanelTimer);
+    state.sharePanelTimer = null;
+  }
+
+  if (message && timeoutMs > 0) {
+    state.sharePanelTimer = setTimeout(() => {
+      if (dom.sharePanelStatus.textContent === message) {
+        dom.sharePanelStatus.textContent = "";
+      }
+    }, timeoutMs);
+  }
+}
+
+function getActiveWarnings() {
+  if (state.currentWarnings?.length) {
+    return state.currentWarnings;
+  }
+  if (!state.currentMetar) {
+    return [];
+  }
+  return generateSmartWarnings();
+}
+
+function bestRunwaySummaryLine() {
+  const best = state.bestRunway || state.sharedSnapshot?.bestRunway || null;
+  if (!best) {
+    return "Best Runway: Unavailable";
+  }
+
+  const heading = String(Math.round(best.heading || 0)).padStart(3, "0");
+  const components = best.components;
+  if (!components?.valid) {
+    return `Best Runway: ${best.ident} (${heading}°), wind variable`;
+  }
+
+  const headOrTail = components.headwind >= 0.01
+    ? `headwind ${formatComponentValue(components.headwind)} kt`
+    : `tailwind ${formatComponentValue(components.tailwind)} kt`;
+  return `Best Runway: ${best.ident} (${heading}°), ${headOrTail}, crosswind ${formatComponentValue(
+    components.crosswind
+  )} kt`;
+}
+
+function buildShareWeatherText() {
+  const resolved = state.currentResolved;
+  const metar = state.currentMetar;
+  const taf = state.currentTaf;
+  const warnings = getActiveWarnings();
+
+  const warningLines = warnings.length
+    ? warnings.map((warning) => `- [${warning.level.toUpperCase()}] ${warning.message}`)
+    : ["- [INFO] No significant operational warnings detected."];
+
+  const lines = [
+    "METAR Lens Weather Share",
+    `Airport: ${resolved?.icao || "Unknown"}${resolved?.displayName ? ` (${resolved.displayName})` : ""}`,
+    `Observed: ${formatObsTime(metar?.timeGroup || null)}`,
+    `METAR: ${metar?.raw || "N/A"}`,
+    `TAF: ${taf?.raw || "N/A"}`,
+    bestRunwaySummaryLine(),
+    "Warnings:",
+    ...warningLines,
+  ];
+
+  return lines.join("\n");
+}
+
+function normalizeWarningLevel(level) {
+  const value = String(level || "").toLowerCase();
+  if (["critical", "c", "4"].includes(value)) {
+    return "critical";
+  }
+  if (["warning", "w", "3"].includes(value)) {
+    return "warning";
+  }
+  if (["caution", "y", "2"].includes(value)) {
+    return "caution";
+  }
+  return "info";
+}
+
+function parseSharedWarnings(list) {
+  if (!Array.isArray(list)) {
+    return [];
+  }
+
+  return list
+     .slice(0, 8)
+    .map((item) => {
+      if (!item || typeof item !== "object") {
+        return null;
+      }
+      const message = String(item.m || item.message || "").trim();
+      if (!message) {
+        return null;
+      }
+      return {
+        level: normalizeWarningLevel(item.l || item.level),
+        icon: String(item.i || item.icon || "INFO").toUpperCase().slice(0, 6),
+        message: message.slice(0, 220),
+      };
+    })
+    .filter(Boolean);
+}
+
+function parseSharedBestRunway(value) {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const ident = String(value.i || value.ident || "").toUpperCase().trim();
+  if (!ident) {
+    return null;
+  }
+
+  const heading = Number(value.h ?? value.heading);
+  const headwind = Number(value.hw ?? 0);
+  const tailwind = Number(value.tw ?? 0);
+  const crosswind = Number(value.cw ?? 0);
+
+  return {
+    ident,
+    heading: Number.isFinite(heading) ? heading : deriveHeadingFromIdent(ident) || 0,
+    components: {
+      valid: true,
+      headwind: Number.isFinite(headwind) ? Math.max(headwind, 0) : 0,
+      tailwind: Number.isFinite(tailwind) ? Math.max(tailwind, 0) : 0,
+      crosswind: Number.isFinite(crosswind) ? Math.max(crosswind, 0) : 0,
+    },
+    condition: {
+      level: normalizeWarningLevel(value.c || value.condition || "info"),
+      label: "Shared",
+      score: 0,
+    },
+  };
+}
+
+function sanitizeSharedPayload(payload) {
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+
+  const hasVerboseFields = Object.prototype.hasOwnProperty.call(payload, "metar")
+    || Object.prototype.hasOwnProperty.call(payload, "airport");
+
+  if (hasVerboseFields) {
+    const airport = payload.airport && typeof payload.airport === "object"
+      ? payload.airport
+      : {};
+
+    const metar = String(payload.metar || "").trim();
+    if (!metar || metar.length > 4000) {
+      return null;
+    }
+
+    const bestRunway = payload.bestRunway && typeof payload.bestRunway === "object"
+      ? {
+        i: String(payload.bestRunway.ident || "").toUpperCase().trim(),
+        h: Number(payload.bestRunway.heading || 0),
+        hw: Number(payload.bestRunway.headwind || 0),
+        tw: Number(payload.bestRunway.tailwind || 0),
+        cw: Number(payload.bestRunway.crosswind || 0),
+        c: String(payload.bestRunway.condition || "info").toLowerCase(),
+      }
+      : null;
+
+    const warnings = Array.isArray(payload.warnings)
+      ? payload.warnings.map((warning) => ({
+        l: normalizeWarningLevel(warning?.level),
+        i: String(warning?.icon || "INFO").toUpperCase(),
+        m: String(warning?.message || "").trim(),
+      }))
+      : [];
+
+    return {
+      id: String(payload.id || "").trim(),
+      v: 1,
+      a: {
+        i: String(airport.icao || "").toUpperCase().trim(),
+        n: String(airport.name || "").trim(),
+        m: String(airport.municipality || "").trim(),
+        c: String(airport.country || "").trim(),
+        t: String(airport.iata || "").toUpperCase().trim(),
+      },
+      m: metar,
+      t: String(payload.taf || "").trim().slice(0, 16000),
+      b: bestRunway?.i ? bestRunway : null,
+      sr: String(payload.selectedRunway || "").toUpperCase().trim().slice(0, 6),
+      w: warnings,
+      o: String(payload.observed || "").trim(),
+      exp: String(payload.expiresAt || payload.exp || "").trim(),
+      ttl: SHARE_TTL_SECONDS[String(payload.ttl || "24h").toLowerCase()]
+        ? String(payload.ttl || "24h").toLowerCase()
+        : "24h",
+    };
+  }
+
+  const metar = String(payload.m || "").trim();
+  if (!metar || metar.length > 4000) {
+    return null;
+  }
+
+  const airport = payload.a && typeof payload.a === "object"
+    ? {
+      i: String(payload.a.i || "").toUpperCase().trim(),
+      n: String(payload.a.n || "").trim(),
+      m: String(payload.a.m || "").trim(),
+      c: String(payload.a.c || "").trim(),
+      t: String(payload.a.t || "").toUpperCase().trim(),
+    }
+    : { i: "", n: "", m: "", c: "", t: "" };
+
+  return {
+    id: String(payload.id || "").trim(),
+    v: Number(payload.v || 1),
+    a: airport,
+    m: metar,
+    t: String(payload.t || "").trim().slice(0, 16000),
+    b: payload.b || null,
+    sr: String(payload.sr || "").toUpperCase().trim().slice(0, 6),
+    w: Array.isArray(payload.w) ? payload.w : [],
+    o: String(payload.o || "").trim(),
+    exp: String(payload.exp || "").trim(),
+    ttl: SHARE_TTL_SECONDS[String(payload.ttl || "24h").toLowerCase()]
+      ? String(payload.ttl || "24h").toLowerCase()
+      : "24h",
+  };
+}
+
+function buildSharePayload() {
+  if (!state.currentMetar) {
+    return null;
+  }
+
+  const airport = state.currentResolved?.airport;
+  const warnings = getActiveWarnings()
+    .slice(0, 6)
+    .map((warning) => ({
+      l: warning.level,
+      i: warning.icon,
+      m: warning.message.slice(0, 120),
+    }));
+
+  const best = state.bestRunway || state.sharedSnapshot?.bestRunway || null;
+
+  return {
+    v: 2,
+    u: generateShareNonce(),
+    a: {
+      i: state.currentResolved?.icao || state.currentMetar.station || "",
+      n: airport?.name || state.currentResolved?.displayName || "",
+      t: airport?.iata || "",
+    },
+    m: String(state.currentMetar.raw || "").trim().slice(0, 4000),
+    t: String(state.currentTaf?.raw || "").trim().replace(/\s+/g, " ").slice(0, 2000),
+    b: best
+      ? {
+        i: best.ident,
+        h: Math.round(best.heading || 0),
+        hw: Math.round(best.components?.headwind || 0),
+        tw: Math.round(best.components?.tailwind || 0),
+        cw: Math.round(best.components?.crosswind || 0),
+        c: best.condition?.level || "info",
+      }
+      : null,
+    sr: state.selectedRunwayComponents?.ident || "",
+    w: warnings,
+    o: formatObsTime(state.currentMetar.timeGroup),
+  };
+}
+
+function generateShareNonce() {
+  try {
+    const bytes = new Uint8Array(6);
+    crypto.getRandomValues(bytes);
+    return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  } catch {
+    return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+  }
+}
+
+function encodeSharePayload(payload) {
+  if (!payload || typeof payload !== "object") {
+    return "";
+  }
+
+  try {
+    const json = JSON.stringify(payload);
+    const bytes = typeof TextEncoder !== "undefined"
+      ? new TextEncoder().encode(json)
+      : Uint8Array.from(json, (char) => char.charCodeAt(0));
+
+    let binary = "";
+    const chunkSize = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+    }
+
+    return btoa(binary)
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=+$/g, "");
+  } catch {
+    return "";
+  }
+}
+
+function decodeSharePayload(token) {
+  if (!token) {
+    return null;
+  }
+
+  try {
+    const padded = token
+      .replace(/-/g, "+")
+      .replace(/_/g, "/")
+      .padEnd(Math.ceil(token.length / 4) * 4, "=");
+    const binary = atob(padded);
+    const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+    const json = typeof TextDecoder !== "undefined"
+      ? new TextDecoder().decode(bytes)
+      : String.fromCharCode(...bytes);
+    return JSON.parse(json);
+  } catch {
+    return null;
+  }
+}
+
+function getAppBasePath() {
+  const parts = window.location.pathname
+    .split("/")
+    .filter(Boolean);
+
+  if (!parts.length) {
+    return "";
+  }
+
+  if (parts[parts.length - 1].toLowerCase() === "index.html") {
+    parts.pop();
+  }
+
+  return parts.length ? `/${parts.join("/")}` : "";
+}
+
+function getShareBaseUrl() {
+  if (SHORT_LINK_DOMAIN) {
+    return SHORT_LINK_DOMAIN.replace(/\/+$/, "");
+  }
+
+  const basePath = getAppBasePath();
+  return `${window.location.origin}${basePath}`.replace(/\/+$/, "");
+}
+
+function buildShareableLink(token) {
+  const safeToken = String(token || "").trim();
+  if (!safeToken) {
+    return "";
+  }
+
+  const url = new URL(getShareBaseUrl());
+  url.search = "";
+  url.hash = "";
+  url.searchParams.set("s", safeToken);
+  return url.toString();
+}
+
+async function requestShortLinkCreation() {
+  const payload = buildSharePayload();
+  if (!payload) {
+    throw new Error("Load METAR before creating a share link.");
+  }
+
+  const token = encodeSharePayload(payload);
+  if (!token) {
+    throw new Error("Unable to encode share payload.");
+  }
+
+  const link = buildShareableLink(token);
+  if (!link) {
+    throw new Error("Unable to build share link.");
+  }
+
+  state.currentShareLink = link;
+
+  if (dom.shareLinkInput) {
+    dom.shareLinkInput.value = link;
+  }
+
+  return { token, link };
+}
+
+function clearShareTokenFromUrl() {
+  if (!window.history?.replaceState) {
+    return;
+  }
+
+  const url = new URL(window.location.href);
+  let changed = false;
+
+  if (url.searchParams.has("s") || url.searchParams.has("ap")) {
+    url.searchParams.delete("s");
+    url.searchParams.delete("ap");
+    changed = true;
+  }
+
+  if (!changed) {
+    return;
+  }
+
+  const search = url.searchParams.toString();
+  const next = `${url.pathname}${search ? `?${search}` : ""}${url.hash}`;
+  window.history.replaceState({}, "", next);
+}
+
+function setMetaContent(selector, value) {
+  if (!value) {
+    return;
+  }
+  const element = document.querySelector(selector);
+  if (element) {
+    element.setAttribute("content", value);
+  }
+}
+
+function updateDynamicShareMeta(payload, shareLink = "") {
+  const icao = payload.a?.i || state.currentResolved?.icao || "Airport";
+  const flight = state.currentMetar
+    ? computeFlightCategory(state.currentMetar.ceilingFt, state.currentMetar.visibility).category
+    : "WX";
+  const best = bestRunwaySummaryLine().replace(/^Best Runway:\s*/, "");
+  const title = `METAR Lens ${icao} - ${flight}`;
+  const description = `Shared aviation weather for ${icao}. ${best}`;
+  const canonicalUrl = shareLink || `${window.location.origin}${window.location.pathname}`;
+
+  document.title = title;
+  setMetaContent('meta[name="description"]', description);
+  setMetaContent('meta[property="og:title"]', title);
+  setMetaContent('meta[property="og:description"]', description);
+  setMetaContent('meta[property="og:url"]', canonicalUrl);
+  setMetaContent('meta[name="twitter:title"]', title);
+  setMetaContent('meta[name="twitter:description"]', description);
+}
+
+
+function refreshSharePanel() {
+  if (!dom.shareCard || !dom.shareLinkInput) {
+    return;
+  }
+
+  if (!state.currentMetar) {
+    dom.shareCard.classList.add("hidden");
+    dom.shareLinkInput.value = "";
+    state.currentShareLink = "";
+    return;
+  }
+
+  dom.shareCard.classList.remove("hidden");
+  if (dom.sharedBriefingNote) {
+    dom.sharedBriefingNote.classList.toggle("hidden", !state.sharedSnapshot);
+  }
+
+  if (state.currentShareLink) {
+    dom.shareLinkInput.value = state.currentShareLink;
+  } else {
+    dom.shareLinkInput.value = "";
+  }
+
+  if (dom.sharePanelStatus && !dom.sharePanelStatus.textContent) {
+    dom.sharePanelStatus.textContent = "Tap Share as Link to generate a client-side weather link.";
+  }
+
+  const payload = buildSharePayload();
+  if (payload) {
+    updateDynamicShareMeta(payload, state.currentShareLink);
+  }
+}
+
+
+function buildSocialShareText() {
+  if (!state.currentMetar) {
+    return "METAR Lens weather briefing";
+  }
+
+  const icao = state.currentResolved?.icao || state.currentMetar.station || "Airport";
+  const flight = computeFlightCategory(state.currentMetar.ceilingFt, state.currentMetar.visibility).category;
+  const best = bestRunwaySummaryLine().replace(/^Best Runway:\s*/, "");
+  return `METAR Lens ${icao} - ${flight} - ${best}`;
+}
+
+function tryAndroidSystemShare(text) {
+  const providers = [globalThis.METARLensAndroid, globalThis.Android];
+  for (const provider of providers) {
+    if (!provider) {
+      continue;
+    }
+    const shareFn = provider.shareWeather || provider.shareText;
+    if (typeof shareFn !== "function") {
+      continue;
+    }
+    try {
+      shareFn.call(provider, text);
+      return true;
+    } catch {
+      // Ignore bridge share errors.
+    }
+  }
+  return false;
+}
+
+async function copyTextToClipboard(text) {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // fallback below
+  }
+
+  try {
+    const area = document.createElement("textarea");
+    area.value = text;
+    area.setAttribute("readonly", "");
+    area.style.position = "absolute";
+    area.style.left = "-9999px";
+    document.body.appendChild(area);
+    area.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(area);
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
+async function handleCopyAsText() {
+  if (!state.currentMetar) {
+    setShareStatus("Load METAR before sharing.");
+    setSharePanelStatus("Load METAR before sharing.");
+    return;
+  }
+
+  const copied = await copyTextToClipboard(buildShareWeatherText());
+  if (copied) {
+    setShareStatus("Weather brief copied as text.");
+    setSharePanelStatus("Copied full weather briefing as plain text.");
+  } else {
+    setShareStatus("Text copy failed.");
+    setSharePanelStatus("Unable to copy text on this device.");
+  }
+}
+
+async function handleShareAsLink({ fromHeader = false } = {}) {
+  if (!state.currentMetar) {
+    setShareStatus("Load METAR before sharing.");
+    setSharePanelStatus("Load METAR before sharing.");
+    return;
+  }
+
+  if (fromHeader && dom.shareCard) {
+    dom.shareCard.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  try {
+    setSharePanelStatus("Generating share link...");
+    await requestShortLinkCreation();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unable to create share link.";
+    setShareStatus("Share-link generation failed.");
+    setSharePanelStatus(message);
+    return;
+  }
+
+  const link = state.currentShareLink;
+  if (dom.shareLinkInput) {
+    dom.shareLinkInput.value = link;
+  }
+
+  const token = new URL(link).searchParams.get("s");
+  const sharedPayload = decodeSharePayload(token);
+  if (sharedPayload) {
+    updateDynamicShareMeta(sharedPayload, link);
+  }
+
+  const shareText = buildSocialShareText();
+  const icao = state.currentResolved?.icao || "Airport";
+
+  if (navigator.share) {
+    try {
+      await navigator.share({
+        title: `METAR Lens ${icao}`,
+        text: shareText,
+        url: link,
+      });
+      setShareStatus("Shared weather link successfully.");
+      setSharePanelStatus("Shared weather link via system share menu.");
+      return;
+    } catch (error) {
+      if (error && error.name === "AbortError") {
+        setShareStatus("Share canceled.", 1500);
+        setSharePanelStatus("Share canceled.", 1500);
+        return;
+      }
+    }
+  }
+
+  const androidShared = tryAndroidSystemShare(`${shareText}
+${link}`);
+  if (androidShared) {
+    setShareStatus("Shared through Android.");
+    setSharePanelStatus("Shared weather link through Android.");
+    return;
+  }
+
+  const copied = await copyTextToClipboard(link);
+  if (copied) {
+    setShareStatus("Share link copied.");
+    setSharePanelStatus("System share unavailable, copied share link instead.");
+  } else {
+    setShareStatus("Share failed.");
+    setSharePanelStatus("Unable to share or copy the share link.");
+  }
+}
+
+function selectRunwayByIdent(ident) {
+  if (!ident || !dom.runwaySelect) {
+    return false;
+  }
+
+  const target = ident.toUpperCase();
+  for (let i = 0; i < dom.runwaySelect.options.length; i += 1) {
+    const option = dom.runwaySelect.options[i];
+    if ((option.dataset.ident || "").toUpperCase() === target) {
+      dom.runwaySelect.selectedIndex = i;
+      return true;
+    }
+  }
+  return false;
+}
+
+function buildResolvedFromSharePayload(payload) {
+  const airport = payload.a || {};
+  const icao = (airport.i || state.currentMetar?.station || "").toUpperCase();
+  const fallbackName = airport.n || icao;
+  const municipality = airport.m || "";
+
+  return {
+    icao,
+    displayName: [fallbackName, municipality].filter(Boolean).join(" — "),
+    airport: {
+      ident: icao,
+      name: fallbackName,
+      municipality,
+      iso_country: airport.c || "",
+      iata: airport.t || "",
+      elevationFt: null,
+    },
+  };
+}
+
+async function loadSharedBriefingPayload(payload) {
+  const sanitized = sanitizeSharedPayload(payload);
+  if (!sanitized) {
+    return false;
+  }
+
+  clearError();
+  setShareStatus("");
+  setSharePanelStatus("");
+  state.currentMetar = parseMetar(sanitized.m);
+  state.currentTaf = sanitized.t ? parseTaf(sanitized.t) : null;
+  state.currentResolved = buildResolvedFromSharePayload(sanitized);
+  state.currentRunways = [];
+  state.selectedRunwayComponents = null;
+  state.bestRunway = parseSharedBestRunway(sanitized.b);
+  state.currentWarnings = parseSharedWarnings(sanitized.w);
+  const currentToken = encodeSharePayload(sanitized);
+  state.currentShareLink = currentToken ? buildShareableLink(currentToken) : "";
+  state.sharedSnapshot = {
+    payload: sanitized,
+    bestRunway: state.bestRunway,
+  };
+
+  dom.input.value = state.currentResolved.icao || "";
+
+  renderMetar(state.currentMetar, state.currentResolved);
+  dom.card.classList.remove("hidden");
+  dom.atisCard.classList.remove("hidden");
+  dom.shareCard.classList.remove("hidden");
+  dom.toolsCard.classList.remove("hidden");
+  dom.runwayAnalysisCard.classList.remove("hidden");
+  dom.warningCard.classList.remove("hidden");
+  dom.riskCard.classList.remove("hidden");
+  dom.tafCard.classList.remove("hidden");
+
+  if (dom.sharedBriefingNote) {
+    dom.sharedBriefingNote.classList.remove("hidden");
+  }
+
+  if (state.currentTaf) {
+    renderTaf(state.currentTaf);
+  } else {
+    dom.tafStatus.textContent = "Shared snapshot did not include TAF data.";
+    dom.rawTaf.textContent = "";
+    updateChartsWithEmpty();
+  }
+
+  if (state.currentWarnings.length) {
+    renderWarnings(state.currentWarnings);
+  }
+
+  const icao = state.currentResolved?.icao;
+  if (icao) {
+    const hasRunways = await updateRunwayList(icao);
+    if (hasRunways) {
+      const selected = sanitized.sr || sanitized.b?.i || "";
+      if (selected) {
+        selectRunwayByIdent(selected);
+      }
+      updateRunwayCalculator();
+    } else {
+      updateRunwayAnalysis();
+      updateRunwayPerformanceHints();
+      updateAtisOutput();
+    }
+  }
+
+  updateRiskLayers();
+  updateSmartWarnings();
+  refreshSharePanel();
+  updateFavoriteButtonState();
+  renderFavorites();
+
+  const station = state.currentResolved?.icao || state.currentMetar.station || "airport";
+  setStatus(`Loaded shared weather snapshot for ${station}.`);
+  setSharePanelStatus("This briefing was restored from a shared link.", 4500);
+  return true;
+}
+
+async function initSharedBriefingFromUrl() {
+  const token = new URL(window.location.href).searchParams.get("s");
+  if (!token) {
+    return;
+  }
+
+  const decoded = decodeSharePayload(token);
+  if (!decoded) {
+    setStatus("Shared link is invalid.");
+    showError("Unable to decode shared weather link.");
+    return;
+  }
+
+  const loaded = await loadSharedBriefingPayload(decoded);
+  if (!loaded) {
+    showError("Unable to open this shared weather link.");
+  }
+}
+
 
 function initTheme() {
   const saved = localStorage.getItem("metar-theme");

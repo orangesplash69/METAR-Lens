@@ -1,20 +1,6 @@
 <!doctype html>
 <html lang="en">
   <head>
-    <meta name="description" content="METAR Lens is a modern aviation weather dashboard that provides live METAR and TAF data with visual wind, cloud, and runway condition tools for pilots and flight simulation users.">
-
-    <meta property="og:title" content="METAR Lens">
-    <meta property="og:description" content="Live aviation weather with METAR and TAF data, visual wind and cloud charts, and runway condition tools for pilots and simmers.">
-    <meta property="og:type" content="website">
-    <meta property="og:url" content="https://orangesplash.de/metarlens/">
-    <meta property="og:image" content="https://raw.githubusercontent.com/orangesplash69/METAR-Lens/refs/heads/main/icon.png">
-      
-    <meta name="twitter:card" content="summary_large_image">
-    <meta name="twitter:title" content="METAR Lens">
-    <meta name="twitter:description" content="Live METAR and TAF aviation weather with visual wind, clouds, and runway tools.">
-    <meta name="twitter:image" content="https://raw.githubusercontent.com/orangesplash69/METAR-Lens/refs/heads/main/icon.png">
-
-    <meta name="metarlens:short-link-domain" content="https://orangesplash.de/metarlens" />
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>METAR Lens</title>
@@ -64,34 +50,15 @@
         </form>
       </section>
 
-      <section class="card favorites-card" id="favoritesCard">
-        <div class="favorites-header">
-          <div>
-            <p class="eyebrow">Favorites</p>
-            <h2>Quick Airports</h2>
-          </div>
-          <p class="tool-subtitle">Save frequently used airports for one-click loading.</p>
-        </div>
-        <p class="favorites-empty" id="favoritesEmpty">No favorite airports saved yet.</p>
-        <div class="favorites-list" id="favoritesList"></div>
-      </section>
-
       <section class="card metar-card hidden" id="metarCard">
         <div class="metar-header">
           <div>
             <p class="station-name" id="stationName">Station</p>
             <p class="station-meta" id="stationMeta">ICAO</p>
           </div>
-          <div class="metar-header-side">
-            <div class="updated">
-              <p class="updated-label">Last updated</p>
-              <p class="updated-time" id="updatedTime">--</p>
-            </div>
-            <div class="header-actions">
-              <button class="header-btn" id="favoriteBtn" type="button">☆ Save Favorite</button>
-              <button class="header-btn" id="shareBtn" type="button">Share</button>
-            </div>
-            <p class="share-status" id="shareStatus"></p>
+          <div class="updated">
+            <p class="updated-label">Last updated</p>
+            <p class="updated-time" id="updatedTime">--</p>
           </div>
         </div>
 
@@ -289,41 +256,6 @@
         </div>
       </section>
 
-      <section class="card atis-card hidden" id="atisCard">
-        <div class="tool-header">
-          <div>
-            <p class="eyebrow">ATIS Style</p>
-            <h2>Spoken Weather Brief</h2>
-          </div>
-          <p class="tool-subtitle">Automatically generated from current METAR and runway analysis.</p>
-        </div>
-        <p class="atis-output" id="atisOutput">Waiting for METAR data.</p>
-      </section>
-
-      <section class="card share-card hidden" id="shareCard">
-        <div class="tool-header">
-          <div>
-            <p class="eyebrow">Share Briefing</p>
-            <h2>Share Weather Snapshot</h2>
-          </div>
-          <p class="tool-subtitle">Client-side encoded links. No account, no backend required.</p>
-        </div>
-        <p class="share-briefing-note hidden" id="sharedBriefingNote">
-          Loaded from a shared weather snapshot link.
-        </p>
-        <div class="share-link-wrap">
-          <label class="share-label" for="shareLinkInput">Shareable link</label>
-          <div class="share-link-row">
-            <input id="shareLinkInput" type="text" readonly spellcheck="false" />
-          </div>
-        </div>
-        <div class="share-action-row">
-          <button class="share-action-btn" id="copyTextBtn" type="button">Copy as Text</button>
-          <button class="share-action-btn share-action-btn--primary" id="shareLinkBtn" type="button">Share as Link</button>
-        </div>
-        <p class="share-panel-status" id="sharePanelStatus"></p>
-      </section>
-
       <section class="card tool-card hidden" id="toolsCard">
         <div class="tool-header">
           <div>
@@ -339,7 +271,6 @@
               <option value="">Select runway</option>
             </select>
             <p class="runway-note" id="runwayNote">Waiting for METAR wind.</p>
-            <div class="runway-performance" id="runwayPerformanceList"></div>
           </div>
           <div class="runway-results" id="runwayResults">
             <div class="component">
@@ -360,28 +291,6 @@
             </div>
           </div>
         </div>
-      </section>
-
-      <section class="card runway-analysis-card hidden" id="runwayAnalysisCard">
-        <div class="tool-header">
-          <div>
-            <p class="eyebrow">Runway Evaluation</p>
-            <h2>All Runways</h2>
-          </div>
-          <p class="tool-subtitle" id="runwayAnalysisMeta">Calculating runway suitability from current METAR.</p>
-        </div>
-        <div class="runway-list" id="runwayList"></div>
-      </section>
-
-      <section class="card warning-card hidden" id="warningCard">
-        <div class="tool-header">
-          <div>
-            <p class="eyebrow">Smart Warnings</p>
-            <h2>Operational Alerts</h2>
-          </div>
-          <p class="tool-subtitle">Auto-updates from METAR, TAF, and selected runway.</p>
-        </div>
-        <div class="warning-list" id="warningList"></div>
       </section>
 
       <section class="card risk-card hidden" id="riskCard">
@@ -467,4 +376,3 @@
     <script src="app.js"></script>
   </body>
 </html>
-

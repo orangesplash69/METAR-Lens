@@ -5,4 +5,5 @@ keystore.properties
 keystore/
 app/build/
 build/
-*.iml
+*.
+old_android/
